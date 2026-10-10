@@ -1061,7 +1061,7 @@ if (typeof module !== 'undefined') module.exports = { ChessEngineFactory, CE };
    To switch a set to real art, set ART_FILES[set] = 1 (idle only) or 2 (idle + attack). Nothing else changes.
    Figures: viewBox 100×160, feet on y≈152, centred on x=50 (the brief asks the same of the drawings).
    ===================================================================== */
-const ART_FILES = { classic: 0, kingdom: 0, fantasy: 0, robots: 0 };
+const ART_FILES = { classic: 0, kingdom: 2, fantasy: 2, robots: 2 };      // 1.1: drawings for all three sets (idle + attack)
 const SETS = [
   { id: 'kingdom', ic: '🏰', name: 'setKingdom' },
   { id: 'fantasy', ic: '🧝', name: 'setFantasy' },
@@ -1079,6 +1079,12 @@ function pieceSrc(set, color, type, pose) {
   if (lvl >= 1) src = 'img/' + set + '/' + c + L + (pose === 'atk' && lvl >= 2 ? '_atk' : '') + '.webp';
   else src = svgURL(set === 'classic' ? classicSVG(color, type) : figureSVG(set, color, type, pose));
   return (ART_CACHE[key] = src);
+}
+// load a set's drawings ahead of time, so the first battle doesn't flash an empty attack pose
+const PRELOADED = {}, PRE_IMGS = [];
+function preloadSet(set) {
+  if (!ART_FILES[set] || PRELOADED[set]) return; PRELOADED[set] = 1;
+  for (const c of [0, 1]) for (let t = 1; t <= 6; t++) for (const pose of ART_FILES[set] >= 2 ? ['', 'atk'] : ['']) { const i = new Image(); i.decoding = 'async'; i.src = pieceSrc(set, c, t, pose); PRE_IMGS.push(i); }
 }
 // classic pieces are drawn in a 100×100 box; figures are 100×160
 const pieceAspect = set => set === 'classic' ? 1 : 1.6;
@@ -1221,7 +1227,7 @@ const BOARDS = {
 /* =====================================================================
    ChessNest — app core (storage · settings · screens · sound · backup)
    ===================================================================== */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const $ = s => document.querySelector(s), $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const P = 'chess_';
@@ -1652,9 +1658,33 @@ alreadyInRoom:"أنت بالفعل في غرفة أخرى — غادرها أو�
    Animations are decoration: the position is already updated, moving pieces are hidden until their
    temporary copies land (lesson from PokerNest: never hold the game for an animation).
    ===================================================================== */
-const BV = { D0: 15, HMIN: 13, HMAX: 34, RIM: .22 };
-const FIGW = { classic: .84 }, FIGW_DEF = .92;               // figure width in board units
+const BV = { D0: 15, HMIN: 13, HMAX: 27, RIM: .22 };
+const FIGW = { classic: .84 }, FIGW_DEF = 1.2;               // figure width in board units
 const BASEF = s => s === 'classic' ? .9 : .95;                 // where the feet are, as a fraction of the image height
+
+// pixel masks: a tap counts on a figure only where it is actually drawn, not on its transparent margins
+const MASKS = {};
+function maskFor(src) {
+  if (src in MASKS) return MASKS[src];
+  MASKS[src] = null;
+  const im = new Image();
+  im.onload = () => {
+    try {
+      const W = 40, H = Math.max(8, Math.round(40 * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, m = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) m[i] = d[i * 4 + 3] > 50 ? 1 : 0;
+      MASKS[src] = { W, H, m };
+    } catch (e) { MASKS[src] = false; }
+  };
+  im.onerror = () => { MASKS[src] = false; };
+  im.src = src;
+  return null;
+}
+function maskHit(mk, fx, fy) {                      // fx, fy: 0..1 inside the image; a little slack around the drawing
+  const cx = Math.floor(fx * mk.W), cy = Math.floor(fy * mk.H);
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = cx + dx, y = cy + dy; if (x >= 0 && y >= 0 && x < mk.W && y < mk.H && mk.m[y * mk.W + x]) return true; }
+  return false;
+}
 
 class ChessBoard {
   constructor(host, opt) {
@@ -1697,8 +1727,8 @@ class ChessBoard {
   }
   flatProj(W, H, set) {
     const figs = set !== 'classic', pad = 4;
-    const sq = Math.floor(Math.min(W - 2 * pad, (H - 2 * pad) / (figs ? 1.04 : 1)) / 8);
-    const left = (W - 8 * sq) / 2, top = (H - 8 * sq) / 2 + (figs ? sq * .12 : 0);
+    const sq = Math.floor(Math.min(W - 2 * pad, (H - 2 * pad) / (figs ? 1.07 : 1)) / 8);
+    const left = (W - 8 * sq) / 2, top = (H - 8 * sq) / 2 + (figs ? sq * .2 : 0);
     return { flat: true, sq, left, top, pt: (u, v) => ({ x: left + u * sq, y: top + (8 - v) * sq }), k: () => sq, inv: (x, y) => ({ u: (x - left) / sq, v: 8 - (y - top) / sq }) };
   }
   poly(u0, v0, u1, v1) { const P = this.P, a = P.pt(u0, v0), b = P.pt(u1, v0), c = P.pt(u1, v1), d = P.pt(u0, v1); return a.x.toFixed(1) + ',' + a.y.toFixed(1) + ' ' + b.x.toFixed(1) + ',' + b.y.toFixed(1) + ' ' + c.x.toFixed(1) + ',' + c.y.toFixed(1) + ' ' + d.x.toFixed(1) + ',' + d.y.toFixed(1); }
@@ -1770,7 +1800,7 @@ class ChessBoard {
     if (P.flat) {
       const sq = P.sq, x0 = P.left + u * sq, rowBottom = P.top + (8 - v) * sq;
       if (set === 'classic') { const w = sq * .92; return { x: x0 + (sq - w) / 2, y: rowBottom - sq * .04 - w * bf, w, h: w, z: 10 + (7 - v) * 10 }; }
-      const hgt = sq * 1.14, w = hgt / asp; return { x: x0 + (sq - w) / 2, y: rowBottom - sq * .03 - hgt * bf, w, h: hgt, z: 10 + (7 - v) * 10 };
+      const hgt = sq * 1.26, w = hgt / asp; return { x: x0 + (sq - w) / 2, y: rowBottom - sq * .03 - hgt * bf, w, h: hgt, z: 10 + (7 - v) * 10 };
     }
     const k = P.k(v + .42), w = (FIGW[set] || FIGW_DEF) * k, hgt = w * asp, b = P.pt(u + .5, v + .42);
     return { x: b.x - w / 2, y: b.y - hgt * bf, w, h: hgt, z: 10 + (7 - v) * 10 };
@@ -1784,7 +1814,7 @@ class ChessBoard {
       let img = this.imgs[sq];
       if (!img) { img = this.imgs[sq] = document.createElement('img'); img.alt = ''; img.decoding = 'async'; img.draggable = false; this.pcs.appendChild(img); }
       const t = x & 7, c = x >> 3, src = pieceSrc(S.set, c, t);
-      if (img.dataset.src !== src) { img.src = src; img.dataset.src = src; }
+      if (img.dataset.src !== src) { img.src = src; img.dataset.src = src; maskFor(src); }
       const [u, v] = this.uv(sq, S.persp), p = this.place(u, v, t, S.set);
       img.style.cssText = 'left:' + p.x.toFixed(1) + 'px;top:' + p.y.toFixed(1) + 'px;width:' + p.w.toFixed(1) + 'px;height:' + p.h.toFixed(1) + 'px;z-index:' + p.z + (this.hidden.has(sq) ? ';visibility:hidden' : '');
       img.dataset.sq = sq;
@@ -1799,7 +1829,11 @@ class ChessBoard {
     const g = P.inv(x, y), ground = this.sqAt(Math.floor(g.u), Math.floor(g.v), S.persp);
     let sprite = -1;
     const list = Object.values(this.imgs).filter(i => i._r).sort((a, b) => a._v - b._v);     // nearest row first
-    for (const i of list) { const p = i._r; if (x >= p.x + p.w * .16 && x <= p.x + p.w * .84 && y >= p.y + p.h * .06 && y <= p.y + p.h * .97) { sprite = +i.dataset.sq; break; } }
+    for (const i of list) {
+      const p = i._r; if (x < p.x || x > p.x + p.w || y < p.y || y > p.y + p.h) continue;
+      const mk = maskFor(i.dataset.src);
+      if (mk ? maskHit(mk, (x - p.x) / p.w, (y - p.y) / p.h) : (x >= p.x + p.w * .2 && x <= p.x + p.w * .8 && y >= p.y + p.h * .3 && y <= p.y + p.h * .97)) { sprite = +i.dataset.sq; break; }
+    }
     const self = this;
     return {
       ground, sprite, x, y, u: g.u, v: g.v,
@@ -2295,7 +2329,7 @@ function boardState() {
     check, fallen, sel: SEL, dragFrom: DRAGSQ, targets: SEL >= 0 && canAct() ? targetsOf(SEL) : null, hint: HINT
   };
 }
-function renderBoard() { if (!G || !POS || SCREEN !== 'game') return; ensureBoard().set(boardState()); }
+function renderBoard() { if (!G || !POS || SCREEN !== 'game') return; preloadSet(ST.set); ensureBoard().set(boardState()); }
 function capturedBy(c) {                                       // pieces of the other colour that are gone
   const start = [0, 8, 2, 2, 2, 1, 0], cur = [0, 0, 0, 0, 0, 0, 0], o = c ^ 1;
   for (let s = 0; s < 128; s++) { if (s & 0x88) { s += 7; continue; } const x = POS.b[s]; if (x && (x >> 3) === o) cur[x & 7]++; }

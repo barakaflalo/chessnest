@@ -20,17 +20,23 @@
 })();
 
 /* ChessNest service worker — bump VERSION on every upload */
-const VERSION = 'chessnest-v1';
+const VERSION = 'chessnest-v2';
+/* the drawings live in their own cache: an app update doesn't download 3 MB of art again.
+   Replacing a drawing under the same file name → change ART to a new name (cnart-2). */
+const ART = 'cnart-1';
 const SHELL = ['./', 'manifest.json', 'icon-192.png', 'icon-512.png', 'privacy_policy.html'];
-// when the drawings arrive: add 'img/<set>/wK.webp' … here (and bump VERSION)
+// the default set (idle poses) is ready offline from the first install; everything else under img/ is cached on first use
+const ART_PRE = ['wK', 'wQ', 'wR', 'wB', 'wN', 'wP', 'bK', 'bQ', 'bR', 'bB', 'bN', 'bP'].map(n => 'img/kingdom/' + n + '.webp');
 const ROOT = new URL('./', self.registration.scope).href;
 
 self.addEventListener('install', e => {
   // each file on its own: one failure (weak network) must not leave the cache empty
-  e.waitUntil(caches.open(VERSION).then(c => Promise.allSettled(SHELL.map(u => fetch(u, { cache: 'reload' }).then(r => (r && r.ok ? c.put(u, r) : null))))).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => Promise.allSettled(SHELL.map(u => fetch(u, { cache: 'reload' }).then(r => (r && r.ok ? c.put(u, r) : null)))))
+    .then(() => caches.open(ART)).then(c => Promise.allSettled(ART_PRE.map(u => c.match(u).then(hit => hit || fetch(u).then(r => (r && r.ok ? c.put(u, r) : null))))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('chessnest-') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => (k.startsWith('chessnest-') && k !== VERSION) || (k.startsWith('cnart-') && k !== ART)).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 const OFFLINE = '<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChessNest</title>' +
@@ -58,6 +64,7 @@ self.addEventListener('fetch', e => {
   }
   e.respondWith(caches.match(req, { ignoreSearch: true }).then(hit => hit || fetch(req).then(r => {
     if (r && r.ok && SHELL.some(s => s !== './' && url.pathname.endsWith('/' + s))) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
+    else if (r && r.ok && url.pathname.includes('/img/')) { const copy = r.clone(); caches.open(ART).then(c => c.put(req, copy)); }
     return r;
   })));
 });
